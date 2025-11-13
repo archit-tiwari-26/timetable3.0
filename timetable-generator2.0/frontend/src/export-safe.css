@@ -1,0 +1,17 @@
+/* Force html2canvas-friendly colors (no OKLCH conversions) */
+.export-safe * {
+  color: rgb(20, 20, 20) !important;
+  background-color: white !important;
+  border-color: rgb(100, 100, 100) !important;
+  box-shadow: none !important;
+}
+
+/* Remove Tailwind gradients */
+.export-safe [class*="bg-"] {
+  background-image: none !important;
+}
+
+/* Prevent weird transforms */
+.export-safe {
+  transform: none !important;
+}
