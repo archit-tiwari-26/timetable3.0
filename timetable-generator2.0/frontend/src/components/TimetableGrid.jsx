@@ -1,35 +1,33 @@
 import React from "react";
 
-// timetable: [
-//   { day, timeslots: [
-//       { start_time, end_time, scheduled_classes: [
-//           { event_name, room_name, teacher_name, batches }
-//       ]}
-//   ]}
-// ]
-
 export default function TimetableGrid({ timetable }) {
-
   if (!timetable || !timetable.length) {
     return <div style={{ color: "#555" }}>No timetable data</div>;
   }
 
-  // Collect unique time ranges
+  // Required days in order (Saturday removed)
+  const dayOrder = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+
+  // Convert timetable → map
+  const dayMap = Object.fromEntries(timetable.map((d) => [d.day, d]));
+
+  // Collect ALL real timeslots
   const allTimes = new Set();
   timetable.forEach((day) =>
-    day.timeslots.forEach((ts) =>
-      allTimes.add(`${ts.start_time}-${ts.end_time}`)
-    )
+    day.timeslots.forEach((ts) => {
+      allTimes.add(`${ts.start_time}-${ts.end_time}`);
+    })
   );
 
+  // Ensure lunch slot is present (keeps lunch UI intact)
+  allTimes.add("12-13");
+
+  // Sort times
   const timeList = Array.from(allTimes).sort((a, b) => {
     const [as] = a.split("-");
     const [bs] = b.split("-");
     return Number(as) - Number(bs);
   });
-
-  const dayOrder = timetable.map((d) => d.day);
-  const dayMap = Object.fromEntries(timetable.map((d) => [d.day, d]));
 
   return (
     <div style={{ overflowX: "auto" }}>
@@ -74,28 +72,54 @@ export default function TimetableGrid({ timetable }) {
           {timeList.map((tk) => {
             const [start, end] = tk.split("-").map(Number);
 
+            const isLunch = start === 12 && end === 13;
+
             return (
               <tr key={`row-${tk}`}>
-                {/* LEFT TIME LABEL */}
+                {/* TIME LABEL */}
                 <td
                   style={{
                     border: "1px solid #999",
                     padding: "8px",
+                    background: isLunch ? "#fff9c4" : "#fafafa",
                     fontFamily: "monospace",
-                    background: "#fafafa",
                     fontWeight: "bold",
                   }}
                 >
                   {start}:00 - {end}:00
+                  {isLunch && (
+                    <div style={{ fontSize: "10px", color: "#444" }}>
+                      (Lunch Break)
+                    </div>
+                  )}
                 </td>
 
                 {/* DAY CELLS */}
                 {dayOrder.map((day) => {
+                  if (isLunch) {
+                    // Lunch special rendering (Saturday removed, so simple)
+                    return (
+                      <td
+                        key={`lunch-${day}-${tk}`}
+                        style={{
+                          border: "1px solid #999",
+                          padding: "10px",
+                          background: "#fffde7",
+                          textAlign: "center",
+                          fontWeight: "500",
+                          color: "#666",
+                        }}
+                      >
+                        Lunch Break
+                      </td>
+                    );
+                  }
+
                   const dayObj = dayMap[day];
-                  const ts = dayObj.timeslots.find(
-                    (x) =>
-                      x.start_time === start && x.end_time === end
-                  );
+                  const ts =
+                    dayObj?.timeslots.find(
+                      (x) => x.start_time === start && x.end_time === end
+                    ) || null;
 
                   return (
                     <td
@@ -103,17 +127,16 @@ export default function TimetableGrid({ timetable }) {
                       style={{
                         border: "1px solid #999",
                         padding: "8px",
-                        verticalAlign: "top",
                         minWidth: "200px",
-                        maxWidth: "240px",
+                        verticalAlign: "top",
                         background: "#ffffff",
                         wordBreak: "break-word",
                       }}
                     >
                       {ts && ts.scheduled_classes.length > 0 ? (
-                        ts.scheduled_classes.map((sc) => (
+                        ts.scheduled_classes.map((sc, idx) => (
                           <div
-                            key={`${sc.event_name}-${sc.room_name}-${sc.teacher_name}`}
+                            key={`${sc.event_name}-${sc.room_name}-${sc.teacher_name}-${idx}`}
                             style={{
                               border: "1px solid #ccc",
                               background: "#ffffff",

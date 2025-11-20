@@ -508,47 +508,82 @@ def get_full_timetable(db: Session = Depends(get_db)):
 @app.post("/admin/auto-prepare/")
 def auto_prepare(db: Session = Depends(get_db)):
 
-    # 1) CREATE TIMESLOTS --------------------------------------------------
+    # =========================================================
+    # 1) CREATE TIMESLOTS  (NO SATURDAY + LUNCH BREAK FIXED)
+    # =========================================================
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
-    existing = db.query(models.Timeslot).all()
-    existing_keys = {(ts.day, ts.start_time, ts.end_time, ts.duration, ts.slot_type) for ts in existing}
+    # Clear all old timeslots to avoid duplicates
+    db.query(models.Timeslot).delete()
+    db.commit()
 
-    # Lecture slots (1 hour)
-    for day in days:
-        for hour in range(8, 17):
-            key = (day, hour, hour + 1, 1, "Lecture")
-            if key not in existing_keys:
-                ts = models.Timeslot(
-                    day=day,
-                    start_time=hour,
-                    end_time=hour + 1,
-                    duration=1,
-                    slot_type="Lecture"
-                )
-                db.add(ts)
+    # Count created slots
+    created_timeslots = 0
 
-    # Lab slots (2 hours)
     for day in days:
-        for hour in range(8, 16, 2):
-            key = (day, hour, hour + 2, 2, "Lab")
-            if key not in existing_keys:
-                ts = models.Timeslot(
-                    day=day,
-                    start_time=hour,
-                    end_time=hour + 2,
-                    duration=2,
-                    slot_type="Lab"
-                )
-                db.add(ts)
+
+        # ----------------------
+        # LECTURE SLOTS (1 hour)
+        # ----------------------
+        # 9–10, 10–11, 11–12 → YES  
+        # 12–13 → lunch → NO  
+        # 13–14, 14–15, 15–16, 16–17 → YES
+
+        for hour in range(9, 17):
+            if hour == 12:      # lunch break skip
+                continue
+
+            ts = models.Timeslot(
+                day=day,
+                start_time=hour,
+                end_time=hour + 1,
+                duration=1,
+                slot_type="Lecture"
+            )
+            db.add(ts)
+            created_timeslots += 1
+
+        # ----------------------
+        # LAB SLOTS (2 hours)
+        # ----------------------
+        # Valid 2-hour windows that do NOT cross lunch:
+        # 9–11   ok  
+        # 10–12  ok  
+        # 11–13  BAD (cross lunch) → skip  
+        # 13–15  ok  
+        # 14–16  ok  
+        # 15–17  ok  
+
+        for hour in [9, 10, 11, 13, 14, 15]:
+
+            # skip 11–13 because crosses lunch
+            if hour == 11:
+                continue
+
+            # skip if exceeds day limit
+            if hour + 2 > 17:
+                continue
+
+            lab = models.Timeslot(
+                day=day,
+                start_time=hour,
+                end_time=hour + 2,
+                duration=2,
+                slot_type="Lab"
+            )
+            db.add(lab)
+            created_timeslots += 1
 
     db.commit()
 
-    # 2) CREATE EVENTS ------------------------------------------------------
+    # =========================================================
+    # 2) CREATE EVENTS  (YOUR ORIGINAL CODE – UNCHANGED)
+    # =========================================================
+
     batches = db.query(models.Batch).all()
     courses = db.query(models.Course).all()
 
-    # Clear old events before regenerating
+    # Clear old events
     db.query(models.SchedulableEvent).delete()
     db.commit()
 
@@ -569,14 +604,14 @@ def auto_prepare(db: Session = Depends(get_db)):
         elif course.credit_hours == 2:
             class_type = "lab"
         else:
-            continue  # unsupported
+            continue  # unsupported course
 
-        # ----- For paired batches (lectures & labs) -----
+        # ----- For paired batches -----
         for b1, b2 in pair_batches:
-            batch_ids = [b1.id, b2.id]
             total_size = b1.size + b2.size
 
             if class_type == "4-credit":
+
                 # 3 lectures
                 for i in range(1, 4):
                     events_to_add.append(models.SchedulableEvent(
@@ -588,7 +623,7 @@ def auto_prepare(db: Session = Depends(get_db)):
                         batches=[b1, b2]
                     ))
 
-                # 1 tutorial (each batch individually)
+                # Tutorials (each batch individually)
                 events_to_add.append(models.SchedulableEvent(
                     name=f"{course.name} Tutorial ({b1.name})",
                     duration=1,
@@ -607,6 +642,8 @@ def auto_prepare(db: Session = Depends(get_db)):
                 ))
 
             elif class_type == "3-credit":
+
+                # 3 lectures
                 for i in range(1, 4):
                     events_to_add.append(models.SchedulableEvent(
                         name=f"{course.name} Lecture {i} ({b1.name}+{b2.name})",
@@ -618,6 +655,7 @@ def auto_prepare(db: Session = Depends(get_db)):
                     ))
 
             elif class_type == "lab":
+                # one 2-hour lab per pair
                 events_to_add.append(models.SchedulableEvent(
                     name=f"{course.name} ({b1.name}+{b2.name})",
                     duration=2,
@@ -627,11 +665,60 @@ def auto_prepare(db: Session = Depends(get_db)):
                     batches=[b1, b2]
                 ))
 
-    # Save all events
+    # save events
     for ev in events_to_add:
         db.add(ev)
-
     db.commit()
 
-    return {"message": f"Auto-prepared {len(events_to_add)} events + timeslots"}
+    return {
+        "message": f"Auto-prepared {len(events_to_add)} events + {created_timeslots} timeslots (Mon–Fri only, lunch excluded)"
+    }
 
+
+
+@app.put("/teachers/{teacher_id}", response_model=schemas.Teacher)
+def update_teacher(teacher_id: int, payload: schemas.TeacherCreate, db: Session = Depends(get_db)):
+    teacher = db.query(Teacher).filter(Teacher.id == teacher_id).first()
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+
+    teacher.name = payload.name
+    teacher.max_hours = payload.max_hours
+
+    db.commit()
+    db.refresh(teacher)
+    return teacher
+
+@app.delete("/teachers/{teacher_id}")
+def delete_teacher(teacher_id: int, db: Session = Depends(get_db)):
+    teacher = db.query(Teacher).filter(Teacher.id == teacher_id).first()
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+
+    db.delete(teacher)
+    db.commit()
+    return {"message": "Teacher deleted successfully"}
+
+
+@app.put("/courses/{course_id}", response_model=schemas.Course)
+def update_course(course_id: int, payload: schemas.CourseCreate, db: Session = Depends(get_db)):
+    course = db.query(models.Course).filter(models.Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    course.name = payload.name
+    course.credit_hours = payload.credit_hours
+
+    db.commit()
+    db.refresh(course)
+    return course
+
+@app.delete("/courses/{course_id}")
+def delete_course(course_id: int, db: Session = Depends(get_db)):
+    course = db.query(models.Course).filter(models.Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    db.delete(course)
+    db.commit()
+    return {"message": "Course deleted successfully"}
